@@ -75,7 +75,8 @@ dispatch_build() {
     --ref "${ref}" \
     -f target="${target}" \
     -f ref="${ref}" \
-    -f ndk_package="${ndk_package}"
+    -f ndk_package="${ndk_package}" \
+    >/dev/null
 
   for _ in $(seq 1 30); do
     sleep 3
