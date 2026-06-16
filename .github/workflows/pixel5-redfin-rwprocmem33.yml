@@ -125,6 +125,15 @@ jobs:
           sed -i 's/check_defconfig//' build.config.common
           sed -i 's/check_defconfig//' build.config.redbull
           sed -i 's/check_defconfig && //' build.config.redbull.no-cfi
+          while IFS= read -r -d '' cfg; do
+            sed -i \
+              -e 's/^KMI_SYMBOL_LIST_STRICT_MODE=.*/KMI_SYMBOL_LIST_STRICT_MODE=0/' \
+              -e 's/^TRIM_NONLISTED_KMI=.*/TRIM_NONLISTED_KMI=0/' \
+              -e 's/^KMI_ENFORCED=.*/KMI_ENFORCED=0/' \
+              "$cfg"
+          done < <(find "${GITHUB_WORKSPACE}/kernel" -type f -name 'build.config*' -print0)
+          echo "KMI-related config after relaxation:"
+          grep -R -nE '^(KMI_SYMBOL_LIST_STRICT_MODE|TRIM_NONLISTED_KMI|KMI_ENFORCED)=' "${GITHUB_WORKSPACE}/kernel" | head -n 40 || true
 
       - name: Build kernel with rwProcMem33
         run: |
