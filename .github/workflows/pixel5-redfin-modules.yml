@@ -109,8 +109,11 @@ jobs:
           MODULE_TARGET: ${{ inputs.module_target }}
         run: |
           set -euxo pipefail
-          chmod +x tools/prepare_redbull_modules_for_build.sh
-          tools/prepare_redbull_modules_for_build.sh "${GITHUB_WORKSPACE}/kernel" "${MODULE_TARGET}"
+          pwd
+          ls -la "${GITHUB_WORKSPACE}"
+          ls -la "${GITHUB_WORKSPACE}/tools"
+          chmod +x "${GITHUB_WORKSPACE}/tools/prepare_redbull_modules_for_build.sh"
+          "${GITHUB_WORKSPACE}/tools/prepare_redbull_modules_for_build.sh" "${GITHUB_WORKSPACE}/kernel" "${MODULE_TARGET}"
 
       - name: Relax defconfig checks and enable external modules
         env:
