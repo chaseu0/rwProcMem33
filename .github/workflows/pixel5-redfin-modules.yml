@@ -1,0 +1,185 @@
+name: Pixel5 Redfin Kernel Modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      module_target:
+        description: "Kernel module target to build"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - rwProcMem
+          - hwBreakpoint
+      module_ref:
+        description: "Repository ref to build"
+        required: true
+        default: master
+        type: string
+      android_branch:
+        description: "Pixel redbull kernel manifest branch"
+        required: true
+        default: android-msm-redbull-4.19-android12
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DEVICE: redfin
+  REPO_URL: https://android.googlesource.com/kernel/manifest
+  REPO_TOOL_URL: https://gerrit.googlesource.com/git-repo
+  REPO_TOOL_REV: stable
+  RAMDISK_BASE_URL: https://raw.githubusercontent.com/nghminh163/Pixel-Redbull-Kernel-Pipeline/main/ramdisk/redfin/android-msm-redbull-4.19-android12
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-redfin-modules:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.module_ref }}
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Show runner resources
+        run: |
+          echo "device=${DEVICE}"
+          echo "branch=${{ inputs.android_branch }}"
+          echo "module_target=${{ inputs.module_target }}"
+          nproc
+          free -h
+          df -h
+
+      - name: Install repo launcher
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "${GITHUB_WORKSPACE}/bin/repo"
+          chmod a+rx "${GITHUB_WORKSPACE}/bin/repo"
+          echo "${GITHUB_WORKSPACE}/bin" >> "${GITHUB_PATH}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential flex bison libssl-dev libelf-dev libncurses5-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi make bc zip unzip \
+            curl git cpio rsync kmod
+
+      - name: Download known-good ramdisk inputs
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/ramdisk"
+          curl -L "${RAMDISK_BASE_URL}/ramdisk" -o "${GITHUB_WORKSPACE}/ramdisk/ramdisk"
+          curl -L "${RAMDISK_BASE_URL}/vendor_ramdisk" -o "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk"
+          ls -lh "${GITHUB_WORKSPACE}/ramdisk"
+
+      - name: Initialize and sync redbull kernel
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/kernel"
+          cd "${GITHUB_WORKSPACE}/kernel"
+          repo init -u "${REPO_URL}" -b "${{ inputs.android_branch }}" --repo-url="${REPO_TOOL_URL}" --repo-rev="${REPO_TOOL_REV}" --depth=1
+          repo --version
+          repo sync -c -j"$(nproc --all)" --no-tags --fail-fast
+          df -h
+
+      - name: Seed ramdisk artifacts
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel"
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/ramdisk" prebuilts/boot-artifacts/ramdisks/ramdisk-aosp_arm64.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-redfin.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-bramble.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-barbet.img
+
+      - name: Stage external module sources
+        env:
+          MODULE_TARGET: ${{ inputs.module_target }}
+        run: |
+          set -euxo pipefail
+          chmod +x tools/prepare_redbull_modules_for_build.sh
+          tools/prepare_redbull_modules_for_build.sh "${GITHUB_WORKSPACE}/kernel" "${MODULE_TARGET}"
+
+      - name: Relax defconfig checks and enable external modules
+        env:
+          MODULE_TARGET: ${{ inputs.module_target }}
+        run: |
+          set -euxo pipefail
+          cd "${GITHUB_WORKSPACE}/kernel/private/msm-google"
+          sed -i 's/check_defconfig//' build.config.common
+          sed -i 's/check_defconfig//' build.config.redbull
+          sed -i 's/check_defconfig && //' build.config.redbull.no-cfi
+          cat > "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.inc" <<'EOF'
+          rwProcMem33-ext/rwProcMem33Module/rwProcMem_module
+          rwProcMem33-ext/hwBreakpointProcModule/hwBreakpointProc_module
+          EOF
+          if [ "${MODULE_TARGET}" = "rwProcMem" ]; then
+            head -n 1 "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.inc" > "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.selected"
+          elif [ "${MODULE_TARGET}" = "hwBreakpoint" ]; then
+            tail -n 1 "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.inc" > "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.selected"
+          else
+            cp "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.inc" "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.selected"
+          fi
+          {
+            echo
+            echo 'EXT_MODULES="${EXT_MODULES}'
+            cat "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.selected"
+            echo '"'
+          } >> build.config.redbull
+          tail -n 20 build.config.redbull
+
+      - name: Build baseline kernel and external modules
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel"
+          BUILD_AOSP_KERNEL=1 ./build_redbull-gki.sh
+          df -h
+
+      - name: Collect module artifacts
+        if: always()
+        env:
+          MODULE_TARGET: ${{ inputs.module_target }}
+        run: |
+          set -euxo pipefail
+          ARTIFACTS_DIR="${GITHUB_WORKSPACE}/artifacts"
+          DIST_DIR="${GITHUB_WORKSPACE}/kernel/out/android-msm-pixel-4.19/dist"
+          mkdir -p "${ARTIFACTS_DIR}/modules" "${ARTIFACTS_DIR}/logs"
+          printf 'module_target=%s\nandroid_branch=%s\nmodule_ref=%s\n' \
+            "${MODULE_TARGET}" "${{ inputs.android_branch }}" "${{ inputs.module_ref }}" > "${ARTIFACTS_DIR}/build-info.txt"
+          if [ -d "${DIST_DIR}" ]; then
+            find "${DIST_DIR}" -maxdepth 1 -type f | sort > "${ARTIFACTS_DIR}/dist-files.txt"
+            find "${DIST_DIR}" -maxdepth 1 -type f -name '*.ko' -exec cp -fv {} "${ARTIFACTS_DIR}/modules/" \;
+            cp -fv "${DIST_DIR}/boot.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
+            cp -fv "${DIST_DIR}/vendor_boot.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
+            cp -fv "${DIST_DIR}/dtbo.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
+            cp -fv "${DIST_DIR}/Image.lz4"* "${ARTIFACTS_DIR}/" 2>/dev/null || true
+            cp -fv "${DIST_DIR}/vmlinux" "${ARTIFACTS_DIR}/" 2>/dev/null || true
+            cp -fv "${DIST_DIR}/System.map" "${ARTIFACTS_DIR}/" 2>/dev/null || true
+          else
+            echo "dist directory not generated" > "${ARTIFACTS_DIR}/dist-files.txt"
+          fi
+          find "${GITHUB_WORKSPACE}/kernel/out" -type f -name '*.ko' -exec cp -nfv {} "${ARTIFACTS_DIR}/modules/" \; || true
+          find "${ARTIFACTS_DIR}/modules" -maxdepth 1 -type f -name '*.ko' -print0 | while IFS= read -r -d '' mod; do
+            modinfo "$mod" > "${ARTIFACTS_DIR}/logs/$(basename "$mod").modinfo.txt" || true
+            file "$mod" > "${ARTIFACTS_DIR}/logs/$(basename "$mod").file.txt" || true
+          done
+          find "${ARTIFACTS_DIR}" -maxdepth 3 -type f | sort > "${ARTIFACTS_DIR}/manifest.txt"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel5-redfin-modules-${{ inputs.module_target }}-${{ github.run_number }}
+          path: ${{ github.workspace }}/artifacts
+          if-no-files-found: warn
