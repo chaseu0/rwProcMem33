@@ -7,6 +7,8 @@ env:
   DEVICE: redfin
   ANDROID_BRANCH: android-msm-redbull-4.19-android12
   REPO_URL: https://android.googlesource.com/kernel/manifest
+  REPO_TOOL_URL: https://gerrit.googlesource.com/git-repo
+  REPO_TOOL_REV: stable
   RAMDISK_BASE_URL: https://raw.githubusercontent.com/nghminh163/Pixel-Redbull-Kernel-Pipeline/main/ramdisk/redfin/android-msm-redbull-4.19-android12
 
 jobs:
@@ -63,7 +65,7 @@ jobs:
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/kernel"
           cd "${GITHUB_WORKSPACE}/kernel"
-          repo init -u "${REPO_URL}" -b "${ANDROID_BRANCH}" --depth=1
+          repo init -u "${REPO_URL}" -b "${ANDROID_BRANCH}" --repo-url="${REPO_TOOL_URL}" --repo-rev="${REPO_TOOL_REV}" --depth=1
           repo --version
           repo sync -c -j"$(nproc --all)" --no-tags --fail-fast
           df -h
