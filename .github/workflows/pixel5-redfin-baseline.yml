@@ -63,7 +63,7 @@ jobs:
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/kernel"
           cd "${GITHUB_WORKSPACE}/kernel"
-          repo init -u "${REPO_URL}" -b "${ANDROID_BRANCH}" --repo-rev=v2.16 --depth=1
+          repo init -u "${REPO_URL}" -b "${ANDROID_BRANCH}" --depth=1
           repo --version
           repo sync -c -j"$(nproc --all)" --no-tags --fail-fast
           df -h
@@ -93,9 +93,14 @@ jobs:
         if: always()
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/artifacts"
-          cd "${GITHUB_WORKSPACE}/kernel/out/android-msm-pixel-4.19/dist"
-          cp -fv boot.img vendor_boot.img dtbo.img Image.lz4* vmlinux System.map "${GITHUB_WORKSPACE}/artifacts/" 2>/dev/null || true
-          find . -maxdepth 1 -type f | sort > "${GITHUB_WORKSPACE}/artifacts/dist-files.txt"
+          DIST_DIR="${GITHUB_WORKSPACE}/kernel/out/android-msm-pixel-4.19/dist"
+          if [ -d "${DIST_DIR}" ]; then
+            cd "${DIST_DIR}"
+            cp -fv boot.img vendor_boot.img dtbo.img Image.lz4* vmlinux System.map "${GITHUB_WORKSPACE}/artifacts/" 2>/dev/null || true
+            find . -maxdepth 1 -type f | sort > "${GITHUB_WORKSPACE}/artifacts/dist-files.txt"
+          else
+            echo "dist directory not generated" > "${GITHUB_WORKSPACE}/artifacts/dist-files.txt"
+          fi
 
       - name: Upload artifacts
         if: always()
