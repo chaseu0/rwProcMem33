@@ -118,9 +118,22 @@ jobs:
         run: |
           set -euxo pipefail
           cd "${GITHUB_WORKSPACE}/kernel/private/msm-google"
-          sed -i 's/check_defconfig//' build.config.common
-          sed -i 's/check_defconfig//' build.config.redbull
-          sed -i 's/check_defconfig && //' build.config.redbull.no-cfi
+          for cfg in build.config.common build.config.redbull build.config.redbull.no-cfi build.config.redbull.vintf; do
+            if [ -f "${cfg}" ]; then
+              sed -i 's/check_defconfig && //g; s/check_defconfig//g' "${cfg}"
+            fi
+          done
+          BUILD_CONFIG_REL="$(
+            sed -n 's/.*BUILD_CONFIG="\([^"]*\)".*/\1/p' "${GITHUB_WORKSPACE}/kernel/build_redbull-gki.sh" \
+              | head -n 1
+          )"
+          if [ -z "${BUILD_CONFIG_REL}" ]; then
+            echo "Unable to resolve BUILD_CONFIG from build_redbull-gki.sh" >&2
+            exit 1
+          fi
+          BUILD_CONFIG_PATH="${GITHUB_WORKSPACE}/kernel/${BUILD_CONFIG_REL}"
+          test -f "${BUILD_CONFIG_PATH}"
+          echo "Effective BUILD_CONFIG=${BUILD_CONFIG_REL}"
           cat > "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.inc" <<'EOF'
           rwProcMem33-ext/rwProcMem33Module/rwProcMem_module
           rwProcMem33-ext/hwBreakpointProcModule/hwBreakpointProc_module
@@ -137,8 +150,8 @@ jobs:
             echo 'EXT_MODULES="${EXT_MODULES}'
             cat "${GITHUB_WORKSPACE}/kernel/rwprocmem33-ext-modules.selected"
             echo '"'
-          } >> build.config.redbull
-          tail -n 20 build.config.redbull
+          } >> "${BUILD_CONFIG_PATH}"
+          tail -n 20 "${BUILD_CONFIG_PATH}"
 
       - name: Build baseline kernel and external modules
         run: |
@@ -157,9 +170,24 @@ jobs:
           mkdir -p "${ARTIFACTS_DIR}/modules" "${ARTIFACTS_DIR}/logs"
           printf 'module_target=%s\nandroid_branch=%s\nmodule_ref=%s\n' \
             "${MODULE_TARGET}" "${{ inputs.android_branch }}" "${{ inputs.module_ref }}" > "${ARTIFACTS_DIR}/build-info.txt"
+          wanted_module() {
+            case "${MODULE_TARGET}" in
+              rwProcMem)
+                [ "$1" = "rwProcMem_module.ko" ]
+                ;;
+              hwBreakpoint)
+                [ "$1" = "hwBreakpointProc_module.ko" ]
+                ;;
+              all)
+                [ "$1" = "rwProcMem_module.ko" ] || [ "$1" = "hwBreakpointProc_module.ko" ]
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
           if [ -d "${DIST_DIR}" ]; then
             find "${DIST_DIR}" -maxdepth 1 -type f | sort > "${ARTIFACTS_DIR}/dist-files.txt"
-            find "${DIST_DIR}" -maxdepth 1 -type f -name '*.ko' -exec cp -fv {} "${ARTIFACTS_DIR}/modules/" \;
             cp -fv "${DIST_DIR}/boot.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
             cp -fv "${DIST_DIR}/vendor_boot.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
             cp -fv "${DIST_DIR}/dtbo.img" "${ARTIFACTS_DIR}/" 2>/dev/null || true
@@ -169,12 +197,40 @@ jobs:
           else
             echo "dist directory not generated" > "${ARTIFACTS_DIR}/dist-files.txt"
           fi
-          find "${GITHUB_WORKSPACE}/kernel/out" -type f -name '*.ko' -exec cp -nfv {} "${ARTIFACTS_DIR}/modules/" \; || true
+          find "${GITHUB_WORKSPACE}/kernel/out" -type f -name '*.ko' -print0 | while IFS= read -r -d '' mod; do
+            if wanted_module "$(basename "$mod")"; then
+              cp -fv "$mod" "${ARTIFACTS_DIR}/modules/"
+            fi
+          done || true
           find "${ARTIFACTS_DIR}/modules" -maxdepth 1 -type f -name '*.ko' -print0 | while IFS= read -r -d '' mod; do
             modinfo "$mod" > "${ARTIFACTS_DIR}/logs/$(basename "$mod").modinfo.txt" || true
             file "$mod" > "${ARTIFACTS_DIR}/logs/$(basename "$mod").file.txt" || true
           done
           find "${ARTIFACTS_DIR}" -maxdepth 3 -type f | sort > "${ARTIFACTS_DIR}/manifest.txt"
+
+      - name: Verify requested modules were produced
+        env:
+          MODULE_TARGET: ${{ inputs.module_target }}
+        run: |
+          set -euxo pipefail
+          case "${MODULE_TARGET}" in
+            rwProcMem)
+              expected_modules="rwProcMem_module.ko"
+              ;;
+            hwBreakpoint)
+              expected_modules="hwBreakpointProc_module.ko"
+              ;;
+            all)
+              expected_modules="rwProcMem_module.ko hwBreakpointProc_module.ko"
+              ;;
+            *)
+              echo "Unknown module target: ${MODULE_TARGET}" >&2
+              exit 1
+              ;;
+          esac
+          for mod in ${expected_modules}; do
+            test -f "${GITHUB_WORKSPACE}/artifacts/modules/${mod}"
+          done
 
       - name: Upload artifacts
         if: always()
