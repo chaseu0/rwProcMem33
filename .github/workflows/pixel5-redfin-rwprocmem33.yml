@@ -129,7 +129,7 @@ jobs:
       - name: Build kernel with rwProcMem33
         run: |
           cd "${GITHUB_WORKSPACE}/kernel"
-          BUILD_AOSP_KERNEL=1 ./build_redbull-gki.sh
+          BUILD_AOSP_KERNEL=1 KMI_SYMBOL_LIST_STRICT_MODE=0 TRIM_NONLISTED_KMI=0 ./build_redbull-gki.sh
           df -h
 
       - name: Collect artifacts
