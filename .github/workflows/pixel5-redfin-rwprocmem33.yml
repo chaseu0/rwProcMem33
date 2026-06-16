@@ -31,6 +31,9 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
+      - name: Re-checkout repository after disk resize
+        uses: actions/checkout@v4
+
       - name: Show runner resources
         run: |
           echo "device=${DEVICE}"
