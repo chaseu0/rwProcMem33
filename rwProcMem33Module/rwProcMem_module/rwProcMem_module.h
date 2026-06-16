@@ -57,8 +57,15 @@ struct rwProcMemDev {
 static struct rwProcMemDev *g_rwProcMem_devp;
 
 static ssize_t rwProcMem_read(struct file* filp, char __user* buf, size_t size, loff_t* ppos);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
 static const struct proc_ops rwProcMem_proc_ops = {
     .proc_read    = rwProcMem_read,
 };
+#else
+static const struct file_operations rwProcMem_proc_ops = {
+	.owner = THIS_MODULE,
+	.read = rwProcMem_read,
+};
+#endif
 
 #endif /* RWPROCMEM_H_ */
