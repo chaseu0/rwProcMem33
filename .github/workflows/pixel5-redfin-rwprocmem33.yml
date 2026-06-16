@@ -100,7 +100,7 @@ jobs:
 
           drivers_mk = Path("drivers/Makefile")
           drivers_text = drivers_mk.read_text(encoding="utf-8-sig")
-          line = "obj-y += rwProcMem33/\\n"
+          line = "obj-y += rwProcMem33/\n"
           if "obj-y += rwProcMem33/" not in drivers_text:
               drivers_text = line + drivers_text
           drivers_mk.write_text(drivers_text, encoding="utf-8")
@@ -115,9 +115,9 @@ jobs:
           echo "drivers/Makefile head:"
           sed -n '1,12p' drivers/Makefile
           echo "rwProcMem33 version line:"
-          rg -n "MY_LINUX_VERSION_CODE" drivers/rwProcMem33/ver_control.h
+          grep -n "MY_LINUX_VERSION_CODE" drivers/rwProcMem33/ver_control.h
           echo "warning flags line:"
-          rg -n "Wno-format-security" Makefile
+          grep -n "Wno-format-security" Makefile
 
       - name: Relax defconfig checks
         run: |
