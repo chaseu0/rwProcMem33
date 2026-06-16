@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include "IoctlBufferPool.h"
-#include <linux\perf_event.h>
+#include <linux/perf_event.h>
 
 typedef int BOOL;
 #define TRUE 1
