@@ -1,0 +1,151 @@
+name: Pixel5 Redfin rwProcMem33 Kernel
+
+on:
+  workflow_dispatch:
+
+env:
+  DEVICE: redfin
+  ANDROID_BRANCH: android-msm-redbull-4.19-android12
+  REPO_URL: https://android.googlesource.com/kernel/manifest
+  REPO_TOOL_URL: https://gerrit.googlesource.com/git-repo
+  REPO_TOOL_REV: stable
+  RAMDISK_BASE_URL: https://raw.githubusercontent.com/nghminh163/Pixel-Redbull-Kernel-Pipeline/main/ramdisk/redfin/android-msm-redbull-4.19-android12
+
+jobs:
+  build-redfin-rwprocmem33:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Show runner resources
+        run: |
+          echo "device=${DEVICE}"
+          echo "branch=${ANDROID_BRANCH}"
+          nproc
+          free -h
+          df -h
+
+      - name: Install repo launcher
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "${GITHUB_WORKSPACE}/bin/repo"
+          chmod a+rx "${GITHUB_WORKSPACE}/bin/repo"
+          echo "${GITHUB_WORKSPACE}/bin" >> "${GITHUB_PATH}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential flex bison libssl-dev libelf-dev libncurses5-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi make bc zip unzip \
+            curl git cpio rsync
+
+      - name: Download known-good ramdisk inputs
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/ramdisk"
+          curl -L "${RAMDISK_BASE_URL}/ramdisk" -o "${GITHUB_WORKSPACE}/ramdisk/boot.img-ramdisk.cpio.lz4"
+          curl -L "${RAMDISK_BASE_URL}/vendor_ramdisk" -o "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk"
+          ls -lh "${GITHUB_WORKSPACE}/ramdisk"
+          file "${GITHUB_WORKSPACE}/ramdisk/boot.img-ramdisk.cpio.lz4"
+          file "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk"
+
+      - name: Initialize and sync redbull kernel
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/kernel"
+          cd "${GITHUB_WORKSPACE}/kernel"
+          repo init -u "${REPO_URL}" -b "${ANDROID_BRANCH}" --repo-url="${REPO_TOOL_URL}" --repo-rev="${REPO_TOOL_REV}" --depth=1
+          repo --version
+          repo sync -c -j"$(nproc --all)" --no-tags --fail-fast
+          df -h
+
+      - name: Seed baseline ramdisk artifacts
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel"
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/boot.img-ramdisk.cpio.lz4" prebuilts/boot-artifacts/ramdisks/ramdisk-aosp_arm64.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-redfin.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-bramble.img
+          cp -fv "${GITHUB_WORKSPACE}/ramdisk/vendor_ramdisk" prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-barbet.img
+
+      - name: Integrate rwProcMem33 into kernel tree
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel/private/msm-google"
+          rm -rf drivers/rwProcMem33
+          mkdir -p drivers/rwProcMem33
+          rsync -a --delete "${GITHUB_WORKSPACE}/rwProcMem33Module/rwProcMem_module/" drivers/rwProcMem33/
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ver = Path("drivers/rwProcMem33/ver_control.h")
+          text = ver.read_text(encoding="utf-8-sig")
+          text = text.replace("#define MY_LINUX_VERSION_CODE KERNEL_VERSION(6,6,30)", "#define MY_LINUX_VERSION_CODE KERNEL_VERSION(4,19,113)")
+          ver.write_text(text, encoding="utf-8")
+
+          drivers_mk = Path("drivers/Makefile")
+          drivers_text = drivers_mk.read_text(encoding="utf-8-sig")
+          line = "obj-y += rwProcMem33/\\n"
+          if "obj-y += rwProcMem33/" not in drivers_text:
+              drivers_text = line + drivers_text
+          drivers_mk.write_text(drivers_text, encoding="utf-8")
+
+          top_mk = Path("Makefile")
+          top_text = top_mk.read_text(encoding="utf-8-sig")
+          if "-Wno-format-security -w" not in top_text:
+              top_text = top_text.replace("-Wno-format-security", "-Wno-format-security -w")
+          top_mk.write_text(top_text, encoding="utf-8")
+          PY
+
+          echo "drivers/Makefile head:"
+          sed -n '1,12p' drivers/Makefile
+          echo "rwProcMem33 version line:"
+          rg -n "MY_LINUX_VERSION_CODE" drivers/rwProcMem33/ver_control.h
+          echo "warning flags line:"
+          rg -n "Wno-format-security" Makefile
+
+      - name: Relax defconfig checks
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel/private/msm-google"
+          sed -i 's/check_defconfig//' build.config.common
+          sed -i 's/check_defconfig//' build.config.redbull
+          sed -i 's/check_defconfig && //' build.config.redbull.no-cfi
+
+      - name: Build kernel with rwProcMem33
+        run: |
+          cd "${GITHUB_WORKSPACE}/kernel"
+          BUILD_AOSP_KERNEL=1 ./build_redbull-gki.sh
+          df -h
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+          DIST_DIR="${GITHUB_WORKSPACE}/kernel/out/android-msm-pixel-4.19/dist"
+          if [ -d "${DIST_DIR}" ]; then
+            cd "${DIST_DIR}"
+            cp -fv boot.img vendor_boot.img dtbo.img Image.lz4* vmlinux System.map *.ko "${GITHUB_WORKSPACE}/artifacts/" 2>/dev/null || true
+            find . -maxdepth 1 -type f | sort > "${GITHUB_WORKSPACE}/artifacts/dist-files.txt"
+          else
+            echo "dist directory not generated" > "${GITHUB_WORKSPACE}/artifacts/dist-files.txt"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel5-redfin-rwprocmem33
+          path: ${{ github.workspace }}/artifacts
+          if-no-files-found: warn
