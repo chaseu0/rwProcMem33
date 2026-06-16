@@ -25,10 +25,18 @@ EOF
 }
 
 require_gh_token() {
-  if [ -z "${GH_TOKEN:-}" ]; then
-    echo "GH_TOKEN is required." >&2
-    exit 2
+  if [ -n "${GH_TOKEN:-}" ]; then
+    return
   fi
+
+  if gh auth status >/dev/null 2>&1; then
+    GH_TOKEN="$(gh auth token)"
+    export GH_TOKEN
+    return
+  fi
+
+  echo "GH_TOKEN is required, or gh must already be logged in." >&2
+  exit 2
 }
 
 repo_slug() {
