@@ -1,1 +1,14 @@
+ifneq ($(KERNELRELEASE),)
 obj-m += hwBreakpointProc_module.o
+else
+KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
+PWD := $(shell pwd)
+
+all modules modules_install clean:
+	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) \
+		O=$(O) LLVM=$(LLVM) DEPMOD=$(DEPMOD) \
+		INSTALL_MOD_PATH=$(INSTALL_MOD_PATH) \
+		INSTALL_MOD_STRIP=$(INSTALL_MOD_STRIP) $@
+
+.PHONY: all modules modules_install clean
+endif
